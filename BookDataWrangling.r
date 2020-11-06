@@ -1,38 +1,76 @@
 #### Data Wrangling the book data ####
 library(tidyverse)
-library(plotmath)
+library(recosystem)
 
 
 # loading the data
 load('data/book_ratings.RData')
 
-#book_info <- as_tibble(book_info)
-#book_ratings <- as_tibble(book_ratings)
-
 # joining ratings with book info
 book_ratings <- left_join(book_ratings, book_info)
 
+# creating train and test sets
+set.seed(2020)
+train_index <- sample(unique(book_ratings$User.ID), size = 0.7*10000)  # 70% train
+
+# splitting data frame
+user_train <- book_ratings %>% # train set
+  filter(User.ID %in% train_index)
+
+user_test <- book_ratings %>% # test set
+  filter(!(User.ID %in% train_index))
+
 # transpose dataset to have user ID's as rows and books as cols with ratings as obs
-book_ratings_trans <- book_ratings %>%
+
+# train
+book_ratings_train <- user_train %>%
   select(User.ID, Book.Rating, ISBN) %>%
   pivot_wider(names_from = ISBN, values_from = Book.Rating, values_fill = 0) %>%
   as.data.frame()
 
-users.list <- as.character(book_ratings_trans$User.ID)
-book_ratings_trans <- book_ratings_trans %>% select(-User.ID)
-row.names(book_ratings_trans) <- as.character(users.list)
-book_ratings_trans <- as.matrix(book_ratings_trans)
+users.list <- as.character(book_ratings_train$User.ID)
+book_ratings_train <- book_ratings_train %>% select(-User.ID)
+row.names(book_ratings_train) <- as.character(users.list)
+book_ratings_train <- as.matrix(book_ratings_train)
+
+# test
+book_ratings_test <- user_test %>%
+  select(User.ID, Book.Rating, ISBN) %>%
+  pivot_wider(names_from = ISBN, values_from = Book.Rating, values_fill = 0) %>%
+  as.data.frame()
+
+users.list <- as.character(book_ratings_test$User.ID)
+book_ratings_test <- book_ratings_test %>% select(-User.ID)
+row.names(book_ratings_test) <- as.character(users.list)
+book_ratings_test <- as.matrix(book_ratings_test)
 
 # create a read book data frame to show which books have been read
-read_book <- book_ratings %>%
+
+# train
+books_read_train <- user_train %>%
   mutate(read = ifelse(Book.Rating > 0, 1, 0)) %>%
   select(User.ID, ISBN, read) %>%
   pivot_wider(names_from = ISBN, values_from = read, values_fill = 0) %>%
   as.data.frame()
 
-read_book <- read_book %>% select(-1)
-rownames(read_book) <- as.character(users.list)
-read_book <- as.matrix(read_book)
+books_read_train <- books_read_train %>% select(-1)
+rownames(books_read_train) <- rownames(book_ratings_train)
+books_read_train <- as.matrix(books_read_train)
+
+# test
+books_read_test <- user_test %>%
+  mutate(read = ifelse(Book.Rating > 0, 1, 0)) %>%
+  select(User.ID, ISBN, read) %>%
+  pivot_wider(names_from = ISBN, values_from = read, values_fill = 0) %>%
+  as.data.frame()
+
+books_read_test <- books_read_test %>% select(-1)
+rownames(books_read_test) <- rownames(book_ratings_test)
+books_read_test <- as.matrix(books_read_test)
+
+# save to RData object
+# ...
+
 
 #### User-based recommendation ####
 
@@ -165,38 +203,115 @@ view(item_based_rec('278137', books_sim, book_ratings, read_book))
 #### Matrix factorization recommender system ####
 
 # accuracy measurement to optimize (100 users and 100 books to start)
-rec_accuracy <- function(x, observed_ratings){ #}, ratingDB){
-  
-  # extract latent parameters for users and books (using 5 latent factors)
-  user_factors <- matrix(x[1:5000], 100, 5)
-  book_factors <- matrix(x[5001:10000], 5, 100)
-  
-  # get prediction rating from dot product between user and book latent factors
-  pred_rating <- user_factors %*% book_factors
-  
-  # calculate RMSE for optimisation
-  errors <- (observed_ratings - pred_rating)^2
-  
-  sqrt(mean(errors[!is.na(observed_ratings)])) # optimize this. Takes into account non NA values only
-}
+# rec_accuracy <- function(x, observed_ratings){ #}, ratingDB){
+#   
+#   # extract latent parameters for users and books (using 5 latent factors)
+#   user_factors <- matrix(x[1:50], 10, 5) # using 5 latent factors and 10 users
+#   book_factors <- matrix(x[51:175], 5, 25) # 5 latent factors for 25 books
+#   
+#   # get prediction rating from dot product between user and book latent factors
+#   pred_rating <- user_factors %*% book_factors
+#   
+#   # calculate RMSE for optimisation
+#   errors <- (observed_ratings - pred_rating)^2
+#   
+#   sqrt(mean(errors[!is.na(observed_ratings)])) # optimize this. Takes into account non NA values only
+# }
+# 
+# set.seed(2020)
+# # optimization
+# opt1 <- optim(par = runif(175), rec_accuracy,
+#               observed_ratings = book_ratings_trans[1:10,1:25],
+#               control = list(maxit = 100000))
+# 
+# opt1$convergence
+# opt1$par
+# 
+# # testing the predictions
+# user_factors <- matrix(opt1$par[1:50], 10, 5)
+# book_factors <- matrix(opt1$par[51:175], 5, 25)
+# 
+# pred_ratings <- user_factors %*% book_factors
+# dim(pred_ratings)
+# rbind(round(pred_ratings[8,],1)[1:5], as.numeric(book_ratings_trans[8,])[1:5])
 
+# using recosystem
+# train
+reco_train <- user_train[,1:3] %>%
+  filter(Book.Rating != 0) # only use ratings greater than 0 for optimisation
+
+# changing ids and isbns
+id_change <- rbind((reco_train$User.ID %>% unique()), 0:5218)
+colnames(id_change) <- id_change[1,]
+id_change <- id_change[2,]
+
+isbn_change <- rbind((reco_train$ISBN %>% unique()), 0:149)
+colnames(isbn_change) <- isbn_change[1,]
+isbn_change <- isbn_change[2,]
+
+# changing the user ids and isbns according to recosystem form
+reco_train <- reco_train %>%
+  mutate(User.ID.reco = id_change[as.character(User.ID)],
+         ISBN.reco = isbn_change[as.character(ISBN)]) #%>%
+  #select(User.ID.reco, ISBN.reco, Book.Rating)
+
+# test
+reco_test <- user_test[,1:3] %>%
+  filter(Book.Rating != 0) # only use ratings greater than 0 for optimisation
+
+# changing ids and isbns
+id_change <- rbind((reco_test$User.ID %>% unique()), 0:2283)
+colnames(id_change) <- id_change[1,]
+id_change <- id_change[2,]
+
+# changing the user ids and isbns according to recosystem form
+reco_test <- reco_test %>%
+  mutate(User.ID.reco = id_change[as.character(User.ID)],
+         ISBN.reco = isbn_change[as.character(ISBN)]) #%>%
+  #select(User.ID.reco, ISBN.reco, Book.Rating)
+
+
+# save data frame to disk
+#write.table(book_ratings_reco, 'data/recoDat.txt', row.names = F, col.names = F)
+
+mf_train <- data_memory(reco_train[,"User.ID.reco"], reco_train[,"ISBN.reco"], reco_train[,"Book.Rating"])
+mf_test <- data_memory(reco_test[,"User.ID.reco"], reco_test[,"ISBN.reco"], reco_test[,"Book.Rating"])
+
+#train_set <- data_file('data/recoDat.txt',
+#                       index1 = T)
+# calling the recosystem function
+r = Reco()
+
+# train the model (no l2 regularisation or bias)
 set.seed(2020)
-# optimization
-opt1 <- optim(par = runif(10000), rec_accuracy,
-              observed_ratings = book_ratings_trans[100,],
-              control = list(maxit = 100000))
+r$train(mf_train, opts = c(dim = 20, costp_l2 = 0,
+                            costq_l2 = 0, nthread = 4))
 
-opt1$convergence
 
-# testing the predictions
-user_factors <- matrix(opt1$par[1:5000], 100, 5)
-book_factors <- matrix(opt1$par[5001:10000], 5, 1000)
+# extract the latent matrix
+output_matrix <- r$output(out_P = out_memory(), out_Q = out_memory())
+user_factors <- output_matrix$P
+book_factors <- output_matrix$Q
 
-pred_ratings <- user_factors %*% book_factors
-dim(pred_ratings)
-rbind(round(pred_ratings[1,],1)[1:5], as.numeric(book_ratings_trans[1,])[1:5])
-  
-  
-  
+train_preds <- user_factors %*% t(book_factors)
+colnames(train_preds) <- unique(reco_train$ISBN)
+rownames(train_preds) <- unique(reco_train$User.ID)
+
+# original ratings
+# train
+reco_ratings_train <- reco_train %>%
+  select(User.ID, ISBN, Book.Rating) %>%
+  pivot_wider(names_from = ISBN, values_from = Book.Rating, values_fill = NA) %>%
+  as.data.frame()
+
+rownames(reco_ratings_train) <- reco_ratings_train$User.ID
+reco_ratings_train <- reco_ratings_train %>% select(-1)
+
+# train accuracy
+train_rmse <- sqrt(mean((as.matrix(train_preds - reco_ratings_train)^2), na.rm = T))
+train_rmse
+
+test_pred <- r$predict(mf_test, out_memory())
+
 
 

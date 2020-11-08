@@ -129,75 +129,71 @@ scrs # NA indicate not enough data to predict the rating for the specific book f
 #### Item-based recommendation ####
 
 # calculate similarity matrix between movies
-books_sim = cosine.sim(t(book_ratings_trans))
+books_sim = cosine.sim(t(book_ratings_train))
 
 # predict for a single user
 user_read <- book_ratings %>%
-  filter(User.ID == '278137', Book.Rating > 0) %>%
-  select(ISBN) %>%
-  unlist() %>%
-  as.character()
-user_read
+  filter(User.ID == '277042', Book.Rating > 0) %>%
+  select(ISBN, Book.Rating) #%>%
+  #unlist() %>%
+  #as.character()
+view(user_read)
 
 
-sort(books_sim[,user_read], decreasing = T)# sum across the rows to get score for each book
-
+#view(sort(books_sim[,user_read$ISBN], decreasing = T))# sum across the rows to get score for each book
+#view(books_sim[,user_read$ISBN])
 # summming across the rows
-sort(apply(books_sim[,user_read], 1, sum), decreasing = T) # unread book scores
+sum_book_sims <- as.data.frame(sort(apply(books_sim[,user_read$ISBN], 1, sum), decreasing = T))
+sum_book_sims <- cbind(sum_book_sims, rownames(sum_book_sims))
 
-user_score <- tibble(ISBN = row.names(books_sim),
-                     score = apply(books_sim[,user_read], 1, sum),
-                     read = read_book['278137',])
+colnames(sum_book_sims) <- c('sim_scores','ISBN')
+sum_book_sims <- sum_book_sims %>%
+  left_join(user_read)
 
-user_score %>%
-  filter(read==0) %>%
-  select(-read) %>%
-  arrange(desc(score))
+book_sim_wProp <- sum_book_sims %>%
+  mutate(prop = sim_scores/sum(sim_scores)) %>%
+  mutate(prop_rating = prop*1500) %>%
+  mutate(pred_rating = prop_rating/ (max(prop_rating)/max(Book.Rating, na.rm = T)))
+
+view(book_sim_wProp) 
+
 
 # function that takes in a user and outputs recommended books using item-based CF
-item_based_rec <- function(user, bookSimilarities, bookDB, readBooks){
+item_based_rec <- function(user, bookSimilarities, bookDB){
   
   # ensure user is a character
   user <- ifelse(is.character(user), user, ascharacter(user))
   
-  # total count of ratings per book
-  totalRaters <- bookDB %>%
-    filter(Book.Rating > 0) %>%
-    group_by(ISBN) %>%
-    count()
-  
-  # obtain average rating for each book per user
-  b_read <- bookDB %>%
-    left_join(totalRaters) %>%
-    group_by(ISBN) %>%
-    mutate(totRate = sum(Book.Rating)) %>%
-    ungroup() %>%
-    group_by(ISBN) %>%
-    mutate(avgRating = totRate/n) %>%
+  # the books read by a user
+  user_read <- bookDB %>%
     filter(User.ID == user, Book.Rating > 0) %>%
-    select(ISBN, avgRating) #%>%
-    #unlist() %>%
-    #as.character()
+    select(ISBN, Book.Rating)
   
-  # get all books with similarity values
-  read_book_avgs <- b_read$avgRating
-  bookSimilarities[,b_read$ISBN]
+  # sum similarity scores across read books for all books in DB
+  sum_book_sims <- as.data.frame(sort(apply(bookSimilarities[,user_read$ISBN], 1, sum), decreasing = T))
+  sum_book_sims <- cbind(sum_book_sims, rownames(sum_book_sims))
   
-  # creating table with item-based scores
-  itemB_scores <- tibble(ISBN = row.names(bookSimilarities),
-                        score = apply(bookSimilarities[,b_read$ISBN], 1, sum),
-                        rating = mean(b_read$avgRating),
-                        read = readBooks[user,])
+  colnames(sum_book_sims) <- c('sim_scores','ISBN')
+  sum_book_sims <- sum_book_sims %>%
+    left_join(user_read)
+  
+  # calculating ratings based on proportions of similarities
+  # i.e divide all possible rating points one can give according to similarity proportion
+  book_sim_wProp <- sum_book_sims %>%
+    mutate(prop = sim_scores/sum(sim_scores)) %>%
+    mutate(prop_rating = prop*1500) %>%
+    mutate(pred_rating = prop_rating/ (max(prop_rating)/max(Book.Rating, na.rm = T)))
+  
 
   # organising output
-  itemB_scores %>%
-    filter(read==0) %>%
-    select(-read) %>%
-    arrange(desc(rating))
+  book_sim_wProp %>%
+    filter(is.na(Book.Rating)) %>%
+    select(ISBN, sim_scores, pred_rating) %>%
+    arrange(desc(sim_scores))
 }
 
 # recommended books for a specific user using item-based CF
-view(item_based_rec('278137', books_sim, book_ratings, read_book))
+view(item_based_rec('277042', books_sim, book_ratings))
 
 
 #### Matrix factorization recommender system ####
@@ -312,6 +308,15 @@ train_rmse <- sqrt(mean((as.matrix(train_preds - reco_ratings_train)^2), na.rm =
 train_rmse
 
 test_pred <- r$predict(mf_test, out_memory())
+
+#### Matrix factorization with L2 regularisation and bias ####
+opts <- r$tune(mf_train, opts = c(dim = 20, costp_l1 = 0, costq_l1 = 0,
+                          lrate = 0.1, nthread = 4))
+
+set.seed(2020)
+r$train(mf_train, opts = c(opts$min, nthread = 4))
+
+
 
 
 

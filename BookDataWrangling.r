@@ -118,16 +118,16 @@ user_recommendations <- function(user, user_simis, rated_books, books_read){
                             orig_rating = as.vector(rated_books[user,]))
   
   # average original rating to apply to books that haven't been read by k nearest neighbours
-  avg_org_rating <- user_scores %>%
-    filter(orig_rating > 0) %>%
-    select(orig_rating)
-  
-  avg_org_rating <- mean(avg_org_rating$orig_rating)
+  # avg_org_rating <- user_scores %>%
+  #   filter(orig_rating > 0) %>%
+  #   select(orig_rating)
+  # 
+  # avg_org_rating <- mean(avg_org_rating$orig_rating)
 
   # removing seen movies and sorting the rest by score
     user_scores %>%
       filter(score != 0, read == 1) %>%
-      mutate(rating = ifelse(is.nan(rating), avg_org_rating, rating)) %>%
+      mutate(rating = ifelse(is.nan(rating), 0, rating)) %>%
       arrange(desc(rating)) %>%
       select(-read)
 }
@@ -187,7 +187,7 @@ diag(books_sim) <- 1
 item_based_rec <- function(user, bookSimilarities, bookDB){
   
   # ensure user is a character
-  user <- ifelse(is.character(user), user, ascharacter(user))
+  user <- ifelse(is.character(user), user, as.character(user))
   
   # the books read by a user
   user_read <- bookDB %>% 
@@ -367,11 +367,14 @@ ensamble_pred
 # get rmse
 get_rmse(ensamble_pred)
 
+pred_trainRating_ensamble <- lapply(as.character(rownames(book_ratings_train)),
+                                    ensamble, user_train_simis, book_ratings_train,
+                                    books_read_train, books_sim, book_ratings, train_preds)
 
 
 
-
-
+# average RMSE over all the users in the training set
+train_rmse_ensamble <- mean(unlist(lapply(pred_trainRating_ensamble, get_rmse)))
 
 
 
